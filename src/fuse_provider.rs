@@ -12,8 +12,8 @@ use crate::rm_manager::Manager;
 mod tablet;
 
 pub struct FuseProvider {
-    manager: Mutex<Manager>,
-    db: Mutex<tablet::Db>,
+    sess_manager: Mutex<Manager>,
+    tablet_db: Mutex<tablet::Db>,
     tokio_handle: tokio::runtime::Handle,
 
     // Keep track of our owning uid, gid for sending perm info.
@@ -58,9 +58,9 @@ impl FuseProvider {
         log::debug!("Detected euid, egid: {uid}, {gid}");
 
         Ok(Self {
-            manager,
+            sess_manager: manager,
             tokio_handle,
-            db,
+            tablet_db: db,
             uid,
             gid,
         })
@@ -69,7 +69,7 @@ impl FuseProvider {
 
 impl Filesystem for FuseProvider {
     fn access(&self, _req: &Request, ino: INodeNo, _mask: AccessFlags, reply: ReplyEmpty) {
-        if self.db.lock().unwrap().exists(ino.into()) {
+        if self.tablet_db.lock().unwrap().exists(ino.into()) {
             reply.ok()
         } else {
             reply.error(Errno::ENOENT)
@@ -77,7 +77,7 @@ impl Filesystem for FuseProvider {
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
-        let db = self.db.lock().unwrap();
+        let db = self.tablet_db.lock().unwrap();
 
         let Some(attr) = db.get_attr_for(ino.into(), self.uid, self.gid) else {
             reply.error(Errno::ENOENT);
@@ -95,7 +95,7 @@ impl Filesystem for FuseProvider {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let db = self.db.lock().unwrap();
+        let db = self.tablet_db.lock().unwrap();
         let children = match db.get_children(ino.into()) {
             Ok(children) => {
                 // Send in order of increasing inode no. so that, even in presence of removals or
@@ -130,7 +130,7 @@ impl Filesystem for FuseProvider {
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        let db = self.db.lock().unwrap();
+        let db = self.tablet_db.lock().unwrap();
         let children = match db.get_children(parent.into()) {
             Err(e) => {
                 reply.error(e);
@@ -175,8 +175,8 @@ impl Filesystem for FuseProvider {
 
         use tablet::NewFileError;
 
-        let mut db = self.db.lock().unwrap();
-        let mut man = self.manager.lock().unwrap();
+        let mut db = self.tablet_db.lock().unwrap();
+        let mut man = self.sess_manager.lock().unwrap();
         match db.new_file(parent.into(), str_name, man.sess(), &self.tokio_handle) {
             Err(e) => {
                 log::warn!("while creating file: {e}");
