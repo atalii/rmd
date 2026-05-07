@@ -2,18 +2,20 @@ use std::{ffi::OsStr, sync::Mutex, time::Duration};
 
 use anyhow::{Context, Result};
 use fuser::{
-    AccessFlags, Errno, FileHandle, FileType, Filesystem, INodeNo, ReplyAttr, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, Request,
+    AccessFlags, Errno, FileHandle, FileType, Filesystem, FopenFlags, INodeNo, ReplyAttr,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, Request,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::rm_manager::Manager;
 
+mod fh;
 mod tablet;
 
 pub struct FuseProvider {
     sess_manager: Mutex<Manager>,
     tablet_db: Mutex<tablet::Db>,
+    file_handles: Mutex<Vec<fh::FileHandle>>,
     tokio_handle: tokio::runtime::Handle,
 
     // Keep track of our owning uid, gid for sending perm info.
@@ -61,6 +63,7 @@ impl FuseProvider {
             sess_manager: manager,
             tokio_handle,
             tablet_db: db,
+            file_handles: Mutex::new(Vec::new()),
             uid,
             gid,
         })
@@ -193,5 +196,36 @@ impl Filesystem for FuseProvider {
                 reply.entry(&Duration::new(0, 0), &attr, fuser::Generation(0));
             }
         };
+    }
+
+    fn open(&self, _req: &Request, ino: INodeNo, flags: fuser::OpenFlags, reply: fuser::ReplyOpen) {
+        let db = self.tablet_db.lock().unwrap();
+        let mut man = self.sess_manager.lock().unwrap();
+        match db.open_file(ino, flags, man.sess(), &self.tokio_handle) {
+            Ok(handle) => {
+                let mut file_handles = self.file_handles.lock().unwrap();
+                file_handles.push(handle);
+                let idx = file_handles.len() as u64 - 1;
+                reply.opened(FileHandle(idx), FopenFlags::empty());
+            }
+            Err(e) => {
+                log::warn!("While opening file: {e:?}");
+                reply.error(e);
+            }
+        }
+    }
+
+    fn read(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _offset: u64,
+        _size: u32,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
+        _reply: fuser::ReplyData,
+    ) {
+        todo!()
     }
 }

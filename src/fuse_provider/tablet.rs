@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 use anyhow::{Context, Result, bail};
 
+use crate::fuse_provider::fh;
+
 #[derive(Default)]
 pub struct Db {
     root: Vec<INodeNo>,
@@ -18,6 +20,12 @@ struct Asset {
     md: super::Metadata,
     children: Vec<INodeNo>,
     id: Uuid,
+    underlying: Option<Underlying>,
+}
+
+enum Underlying {
+    Pdf,
+    Epub,
 }
 
 #[derive(Clone, Copy)]
@@ -72,10 +80,12 @@ impl Db {
             let md: super::Metadata = serde_json::from_slice(md.as_slice())
                 .context(format!("Couldn't decode: {path:?}"))?;
 
-            let id = file_name.strip_suffix(".metadata").unwrap();
-            let id = Uuid::parse_str(id).context("Failed to parse ID.")?;
+            let without_ext = file_name.strip_suffix(".metadata").unwrap();
+            let id = Uuid::parse_str(without_ext).context("Failed to parse ID.")?;
 
-            db.push(id, md)?;
+            let underlying = Underlying::detect(sess, without_ext).await?;
+
+            db.push(id, md, underlying)?;
         }
 
         db.fixup_parentage()?;
@@ -107,10 +117,16 @@ impl Db {
     }
 
     /// Add an asset to the store. Do not maintain parentage structure.
-    fn push(&mut self, id: Uuid, md: super::Metadata) -> Result<()> {
+    fn push(
+        &mut self,
+        id: Uuid,
+        md: super::Metadata,
+        underlying: Option<Underlying>,
+    ) -> Result<()> {
         let asset = Asset {
             md,
             id,
+            underlying,
             children: Vec::new(),
         };
 
@@ -175,6 +191,7 @@ impl Db {
                 visible_name: name.as_ref().to_string(),
             },
             id: Uuid::new_v4(),
+            underlying: None,
             children: Vec::new(),
         };
 
@@ -195,20 +212,39 @@ impl Db {
         Ok(child_ino)
     }
 
+    pub fn open_file(
+        &self,
+        ino: INodeNo,
+        flags: fuser::OpenFlags,
+        sess: &SftpSession,
+        handle: &tokio::runtime::Handle,
+    ) -> std::result::Result<fh::FileHandle, Errno> {
+        let Some(asset) = self.store.get(&ino) else {
+            return Err(Errno::ENOENT);
+        };
+
+        handle.block_on(async {
+            match &asset.underlying {
+                None => Ok(fh::FileHandle::create(asset.uuid_string()).await),
+                Some(u) => {
+                    let uuid = asset.uuid_string();
+                    let ext = u.ext();
+                    let path = format!("{XOCHITL_PATH}/{uuid}.{ext}");
+
+                    fh::FileHandle::open(path, sess, flags.acc_mode()).await
+                }
+            }
+        })
+    }
+
     async fn init_file(&self, sess: &SftpSession, asset: &Asset) -> Result<(), TabletSftpError> {
-        let mut buf = Uuid::encode_buffer();
-        let uuid = asset.id.hyphenated().encode_lower(&mut buf);
-
-        // Since this is a UUID, string formatting paths is *fine.*
-        assert!(!uuid.contains("/"));
-
-        let content_path = format!("{XOCHITL_PATH}/{uuid}.content");
+        let content_path = asset.content_path();
         log::debug!("Writing content to: {content_path}");
 
         let mut content_file = sess.create(content_path).await?;
         content_file.write_all(b"{}").await?;
 
-        let metadata_path = format!("{XOCHITL_PATH}/{uuid}.metadata");
+        let metadata_path = asset.metadata_path();
         log::debug!("Writing metadata to: {metadata_path}");
 
         let mut metadata_file = sess.create(metadata_path).await?;
@@ -273,6 +309,25 @@ impl Db {
     }
 }
 
+impl Asset {
+    fn content_path(&self) -> String {
+        let uuid = self.uuid_string();
+
+        // Since this is a UUID, string formatting paths is *fine.*
+        format!("{XOCHITL_PATH}/{uuid}.content")
+    }
+
+    fn metadata_path(&self) -> String {
+        let uuid = self.uuid_string();
+        format!("{XOCHITL_PATH}/{uuid}.metadata")
+    }
+
+    fn uuid_string(&self) -> String {
+        let mut buf = Uuid::encode_buffer();
+        self.id.hyphenated().encode_lower(&mut buf).to_string()
+    }
+}
+
 impl From<INodeNo> for DbPointer {
     fn from(id: INodeNo) -> Self {
         match id.0 {
@@ -285,5 +340,27 @@ impl From<INodeNo> for DbPointer {
 impl From<Uuid> for DbPointer {
     fn from(uuid: Uuid) -> Self {
         uuid_to_ino(uuid).into()
+    }
+}
+
+impl Underlying {
+    async fn detect(sess: &SftpSession, uuid_slug: &str) -> Result<Option<Self>> {
+        let pdf_path = format!("{XOCHITL_PATH}/{uuid_slug}.pdf");
+        let epub_path = format!("{XOCHITL_PATH}/{uuid_slug}.epub");
+
+        if sess.try_exists(pdf_path).await? {
+            Ok(Some(Self::Pdf))
+        } else if sess.try_exists(epub_path).await? {
+            Ok(Some(Self::Epub))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn ext(&self) -> &'static str {
+        match self {
+            Underlying::Pdf => "pdf",
+            Underlying::Epub => "epub",
+        }
     }
 }
