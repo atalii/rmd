@@ -32,4 +32,3 @@ features = [ "rt-route" ]
 
 [dependencies.netlink-socket2]
 version = "0.3.0"
-features = [ "async", "tokio" ]

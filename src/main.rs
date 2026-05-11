@@ -7,12 +7,14 @@ use tokio::sync::mpsc;
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let mut nl = NetListener::new().await?;
+    let rh = tokio::runtime::Handle::current();
+    let mut nl = NetListener::new(rh)?;
 
     let (tx, rx) = mpsc::channel(1);
+    let h = std::thread::spawn(move || nl.listen(tx));
 
     tokio::select! {
-        Err(e) = nl.listen(tx) => Err(e.context("Network monitor task terminated.")),
+        Err(e) = tokio::task::spawn_blocking(move || h.join()) => Err(anyhow::Error::new(e)).flatten(),
         Err(e) = monitor_conns(rx) => Err(e),
     }?;
 

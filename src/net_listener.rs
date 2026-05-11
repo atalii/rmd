@@ -2,12 +2,13 @@
 use libc::{IFA_LOCAL, RTNLGRP_IPV4_ROUTE};
 use netlink_bindings::{rt_route, utils::IpAddr};
 use netlink_socket2::MulticastSocketRaw;
-use tokio::sync::mpsc;
+use tokio::{runtime, sync::mpsc};
 
 use anyhow::{Context, Result};
 
 pub struct NetListener {
     mc_sock: MulticastSocketRaw,
+    rh: runtime::Handle,
 }
 
 #[derive(Debug)]
@@ -17,24 +18,24 @@ pub enum Event {
 }
 
 impl NetListener {
-    pub async fn new() -> Result<Self> {
+    pub fn new(rh: runtime::Handle) -> Result<Self> {
         let mut mc_sock = MulticastSocketRaw::new(rt_route::PROTONUM)?;
         mc_sock.listen(RTNLGRP_IPV4_ROUTE)?;
 
-        Ok(Self { mc_sock })
+        Ok(Self { mc_sock, rh })
     }
 
     /// Write an [Event] to the provided channel when a change in available devices is reported by
     /// the kernel.
-    pub async fn listen(&mut self, ch: mpsc::Sender<Event>) -> Result<()> {
+    pub fn listen(&mut self, ch: mpsc::Sender<Event>) -> Result<()> {
         loop {
-            let msg = self.mc_sock.recv().await;
+            let msg = self.mc_sock.recv();
             match msg {
                 Ok((header, buf)) => {
                     let buf = buf.to_owned();
                     if let Some(e) = self.filter_msg(header.message_type, buf) {
-                        ch.send(e)
-                            .await
+                        self.rh
+                            .block_on(ch.send(e))
                             .with_context(|| "Couldn't send network event to channel.")?;
                     }
                 }

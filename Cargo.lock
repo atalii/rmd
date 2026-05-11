@@ -1410,7 +1410,6 @@ dependencies = [
  "libc",
  "maybe-async",
  "netlink-bindings",
- "tokio",
 ]
 
 [[package]]
