@@ -7,15 +7,16 @@ use fuser::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::rm_manager::Manager;
+use crate::{fuse_provider::fh_store::FhStore, rm_manager::Manager};
 
 mod fh;
+mod fh_store;
 mod tablet;
 
 pub struct FuseProvider {
     sess_manager: Mutex<Manager>,
     tablet_db: Mutex<tablet::Db>,
-    file_handles: Mutex<Vec<fh::FileHandle>>,
+    file_handles: Mutex<FhStore>,
     tokio_handle: tokio::runtime::Handle,
 
     // Keep track of our owning uid, gid for sending perm info.
@@ -63,7 +64,7 @@ impl FuseProvider {
             sess_manager: manager,
             tokio_handle,
             tablet_db: db,
-            file_handles: Mutex::new(Vec::new()),
+            file_handles: Mutex::new(FhStore::new()),
             uid,
             gid,
         })
@@ -204,8 +205,7 @@ impl Filesystem for FuseProvider {
         match db.open_file(ino, flags, man.sess(), &self.tokio_handle) {
             Ok(handle) => {
                 let mut file_handles = self.file_handles.lock().unwrap();
-                file_handles.push(handle);
-                let idx = file_handles.len() as u64 - 1;
+                let idx = file_handles.push(handle);
                 reply.opened(FileHandle(idx), FopenFlags::empty());
             }
             Err(e) => {
@@ -215,17 +215,26 @@ impl Filesystem for FuseProvider {
         }
     }
 
-    fn read(
+    fn release(
         &self,
         _req: &Request,
         _ino: INodeNo,
-        _fh: FileHandle,
-        _offset: u64,
-        _size: u32,
+        fh: FileHandle,
         _flags: fuser::OpenFlags,
         _lock_owner: Option<fuser::LockOwner>,
-        _reply: fuser::ReplyData,
+        _flush: bool,
+        reply: ReplyEmpty,
     ) {
-        todo!()
+        let fh = {
+            let mut fh_store = self.file_handles.lock().unwrap();
+            fh_store.delete(fh.0)
+        };
+
+        if let Err(e) = self.tokio_handle.block_on(fh.shutdown()) {
+            log::error!("Can't shutdown file: {e}");
+            reply.error(Errno::EIO);
+        } else {
+            reply.ok();
+        }
     }
 }

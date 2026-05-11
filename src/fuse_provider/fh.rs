@@ -12,7 +12,8 @@ use tokio::io::AsyncWriteExt;
 pub type Result<T> = std::result::Result<T, Errno>;
 
 /// Since a .metadata may exist without any content, we need to provide a
-/// writable handle in this case which may be used to actually create the file.
+/// different kind of handle in this case which may be used to actually create
+/// the file.
 pub enum FileHandle {
     Created(CreatedFileHandle),
     Remote(russh_sftp::client::fs::File),
@@ -47,7 +48,7 @@ impl FileHandle {
             OpenAccMode::O_WRONLY => OpenFlags::WRITE,
             OpenAccMode::O_RDWR => {
                 log::warn!("Can't open: {}. O_RDWR unsupported.", path.into());
-                return Err(Errno::EINVAL);
+                return Err(Errno::ENOTSUP);
             }
         };
 
@@ -61,7 +62,7 @@ impl FileHandle {
         }
     }
 
-    async fn shutdown(self) -> std::io::Result<()> {
+    pub async fn shutdown(self) -> std::io::Result<()> {
         match self {
             FileHandle::Created(f) => f.shutdown().await,
             FileHandle::Remote(mut file) => file.shutdown().await,
