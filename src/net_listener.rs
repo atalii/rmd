@@ -46,10 +46,8 @@ impl NetListener {
 
     pub fn filter_msg(&mut self, message_type: u16, buf: Vec<u8>) -> Option<Event> {
         match message_type {
-            // DELROUTE and NEWROUTE appear to trigger only when the other should. I don't know
-            // why.
-            libc::RTM_DELROUTE if concerns_remarkable(&buf) => Some(Event::Connection),
-            libc::RTM_NEWROUTE if concerns_remarkable(&buf) => Some(Event::Disconnection),
+            libc::RTM_DELROUTE if concerns_remarkable(&buf) => Some(Event::Disconnection),
+            libc::RTM_NEWROUTE if concerns_remarkable(&buf) => Some(Event::Connection),
             libc::RTM_NEWROUTE | libc::RTM_DELROUTE => {
                 log::debug!("Route addition/deletion not pertaining to RM detected.");
                 None
