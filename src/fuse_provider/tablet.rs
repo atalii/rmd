@@ -21,6 +21,7 @@ struct Asset {
     children: Vec<INodeNo>,
     id: Uuid,
     underlying: Option<Underlying>,
+    size_on_disk: u64,
 }
 
 enum Underlying {
@@ -84,8 +85,12 @@ impl Db {
             let id = Uuid::parse_str(without_ext).context("Failed to parse ID.")?;
 
             let underlying = Underlying::detect(sess, without_ext).await?;
+            let (underlying, size_on_disk) = match underlying {
+                None => (None, 0),
+                Some((u, s)) => (Some(u), s),
+            };
 
-            db.push(id, md, underlying)?;
+            db.push(id, md, underlying, size_on_disk)?;
         }
 
         db.fixup_parentage()?;
@@ -122,11 +127,13 @@ impl Db {
         id: Uuid,
         md: super::Metadata,
         underlying: Option<Underlying>,
+        size_on_disk: u64,
     ) -> Result<()> {
         let asset = Asset {
             md,
             id,
             underlying,
+            size_on_disk,
             children: Vec::new(),
         };
 
@@ -192,6 +199,7 @@ impl Db {
             },
             id: Uuid::new_v4(),
             underlying: None,
+            size_on_disk: 0,
             children: Vec::new(),
         };
 
@@ -258,6 +266,10 @@ impl Db {
         self.store.get(&id).map(|x| &x.md)
     }
 
+    fn get_size_on_disk(&self, id: INodeNo) -> Option<u64> {
+        self.store.get(&id).map(|x| x.size_on_disk)
+    }
+
     pub fn get_uuid(&self, id: INodeNo) -> Option<Uuid> {
         self.store.get(&id).map(|x| x.id)
     }
@@ -266,9 +278,10 @@ impl Db {
         match ptr {
             DbPointer::INode { id } => {
                 let tp = &self.get_metadata(id)?.r#type;
+                let sz = self.get_size_on_disk(id)?;
                 Some(fuser::FileAttr {
                     ino: id,
-                    size: 0,
+                    size: sz,
                     blocks: 0,
                     atime: SystemTime::UNIX_EPOCH,
                     mtime: SystemTime::UNIX_EPOCH,
@@ -344,14 +357,16 @@ impl From<Uuid> for DbPointer {
 }
 
 impl Underlying {
-    async fn detect(sess: &SftpSession, uuid_slug: &str) -> Result<Option<Self>> {
+    async fn detect(sess: &SftpSession, uuid_slug: &str) -> Result<Option<(Self, u64)>> {
         let pdf_path = format!("{XOCHITL_PATH}/{uuid_slug}.pdf");
         let epub_path = format!("{XOCHITL_PATH}/{uuid_slug}.epub");
 
-        if sess.try_exists(pdf_path).await? {
-            Ok(Some(Self::Pdf))
-        } else if sess.try_exists(epub_path).await? {
-            Ok(Some(Self::Epub))
+        if sess.try_exists(&pdf_path).await? {
+            let size = sess.metadata(&pdf_path).await?.size;
+            Ok(size.and_then(|size| Some((Self::Pdf, size))))
+        } else if sess.try_exists(&epub_path).await? {
+            let size = sess.metadata(&epub_path).await?.size;
+            Ok(size.and_then(|size| Some((Self::Epub, size))))
         } else {
             Ok(None)
         }
