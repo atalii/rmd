@@ -5,9 +5,11 @@
 //! creating a file, we won't know what the file needs to be called (usually
 //! either stub.epub, stub.pdf) until after we get the first several bytes.
 
+use std::io::SeekFrom;
+
 use fuser::{Errno, OpenAccMode};
 use russh_sftp::{self, client::SftpSession, protocol::OpenFlags};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 pub type Result<T> = std::result::Result<T, Errno>;
 
@@ -60,6 +62,25 @@ impl FileHandle {
                 Err(Errno::EBADMSG)
             }
         }
+    }
+
+    pub async fn read(&mut self, offset: u64, len: usize) -> std::result::Result<Vec<u8>, Errno> {
+        let Self::Remote(inner) = self else {
+            return Err(Errno::EBADF);
+        };
+
+        if let Err(e) = inner.seek(SeekFrom::Start(offset)).await {
+            log::warn!("Failed seeking remote file: {e}");
+            return Err(Errno::EIO);
+        }
+
+        let mut out = vec![0; len];
+        if let Err(e) = inner.read_exact(out.as_mut_slice()).await {
+            log::warn!("Failed reading remote file: {e}");
+            return Err(Errno::EIO);
+        }
+
+        Ok(out)
     }
 
     pub async fn shutdown(self) -> std::io::Result<()> {

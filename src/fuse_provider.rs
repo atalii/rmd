@@ -133,6 +133,26 @@ impl Filesystem for FuseProvider {
         reply.ok()
     }
 
+    fn read(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        size: u32,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
+        reply: fuser::ReplyData,
+    ) {
+        let mut fhs = self.file_handles.lock().unwrap();
+        let fh = &mut fhs[fh.0];
+
+        match self.tokio_handle.block_on(fh.read(offset, size as usize)) {
+            Ok(data) => reply.data(&data),
+            Err(e) => reply.error(e),
+        };
+    }
+
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let db = self.tablet_db.lock().unwrap();
         let children = match db.get_children(parent.into()) {
