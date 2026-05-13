@@ -11,6 +11,8 @@ use fuser::{Errno, OpenAccMode};
 use russh_sftp::{self, client::SftpSession, protocol::OpenFlags};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
+use super::tablet::XOCHITL_PATH;
+
 pub type Result<T> = std::result::Result<T, Errno>;
 
 /// Since a .metadata may exist without any content, we need to provide a
@@ -21,7 +23,7 @@ pub enum FileHandle {
     Remote(russh_sftp::client::fs::File),
 }
 
-struct CreatedFileHandle {
+pub struct CreatedFileHandle {
     buf: Vec<u8>,
     future_path_stub: String,
 }
@@ -36,7 +38,7 @@ impl FileHandle {
     pub async fn create<I: Into<String>>(stub: I) -> Self {
         Self::Created(CreatedFileHandle {
             buf: Vec::new(),
-            future_path_stub: stub.into(),
+            future_path_stub: format!("{XOCHITL_PATH}/{}", stub.into()),
         })
     }
 
@@ -64,7 +66,7 @@ impl FileHandle {
         }
     }
 
-    pub async fn read(&mut self, offset: u64, len: usize) -> std::result::Result<Vec<u8>, Errno> {
+    pub async fn read(&mut self, offset: u64, len: usize) -> Result<Vec<u8>> {
         let Self::Remote(inner) = self else {
             return Err(Errno::EBADF);
         };
@@ -81,6 +83,43 @@ impl FileHandle {
         }
 
         Ok(out)
+    }
+
+    pub async fn write(&mut self, sess: &SftpSession, offset: u64, data: &[u8]) -> Result<u32> {
+        match self {
+            FileHandle::Remote(f) => {
+                f.seek(SeekFrom::Start(offset))
+                    .await
+                    .map_err(|x| Errno::EIO)?;
+                let written = f.write(data).await?;
+                written.try_into().map_err(|_| Errno::EOVERFLOW)
+            }
+            FileHandle::Created(fh) => {
+                fh.buf.extend_from_slice(data);
+                if let Some(new_path) = if fh.buf.starts_with(&PDF_MAGIC_NUMBER) {
+                    Some(format!("{}.pdf", fh.future_path_stub))
+                } else if fh.buf.starts_with(&EPUB_MAGIC_NUMBER) {
+                    Some(format!("{}.epub", fh.future_path_stub))
+                } else {
+                    None
+                } {
+                    log::info!("Creating file at: {new_path}");
+                    let mut f = sess.create(new_path).await.map_err(|e| {
+                        log::warn!("Can't create file: {e}");
+                        Errno::EIO
+                    })?;
+
+                    if let Err(e) = f.write_all(fh.buf.as_slice()).await {
+                        log::warn!("Can't write to new file: {e}");
+                        return Err(Errno::EIO);
+                    };
+
+                    *self = FileHandle::Remote(f);
+                };
+
+                data.len().try_into().map_err(|_| Errno::EOVERFLOW)
+            }
+        }
     }
 
     pub async fn shutdown(self) -> std::io::Result<()> {

@@ -53,7 +53,7 @@ pub enum TabletSftpError {
     SerializationFailure(#[from] serde_json::Error),
 }
 
-const XOCHITL_PATH: &str = "/home/root/.local/share/remarkable/xochitl";
+pub const XOCHITL_PATH: &str = "/home/root/.local/share/remarkable/xochitl";
 
 pub fn uuid_to_ino(id: Uuid) -> INodeNo {
     let id: &[u8] = id.as_ref();
