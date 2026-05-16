@@ -1,6 +1,7 @@
 use std::{
+    env,
     ops::DerefMut,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -28,9 +29,16 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn new() -> Self {
+        let mountpoint = env::var("XDG_RUNTIME_DIR")
+            .map(|x| Into::<PathBuf>::into(x).join("remarkable"))
+            .unwrap_or_else(|e| {
+                log::warn!("XDG_RUNTIME_DIR not found: {e}");
+                "/tmp/tablet".into()
+            });
+
         Self {
             inner: Arc::new(Mutex::new(MonitorInner::Disconnected)),
-            mountpoint: "/tmp/tablet".into(),
+            mountpoint,
         }
     }
 
