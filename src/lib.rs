@@ -1,11 +1,13 @@
 use std::{
     ops::DerefMut,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
 use anyhow::{Result, bail};
 use fuse_provider::FuseProvider;
 use fuser::{BackgroundSession, spawn_mount2};
+use tokio::fs;
 
 pub mod fuse_provider;
 pub mod net_listener;
@@ -21,18 +23,14 @@ enum MonitorInner {
 
 pub struct Monitor {
     inner: Arc<Mutex<MonitorInner>>,
-}
-
-impl Default for Monitor {
-    fn default() -> Self {
-        Self::new()
-    }
+    mountpoint: PathBuf,
 }
 
 impl Monitor {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(MonitorInner::Disconnected)),
+            mountpoint: "/tmp/tablet".into(),
         }
     }
 
@@ -74,6 +72,8 @@ impl Monitor {
         }
 
         let inner = self.inner.clone();
+        let mountpoint = self.mountpoint.clone();
+
         tokio::spawn(async move {
             let m = match rm_manager::Manager::new().await {
                 Ok(m) => {
@@ -90,12 +90,17 @@ impl Monitor {
 
             match FuseProvider::new(m, tokio::runtime::Handle::current()).await {
                 Ok(f) => {
+                    if let Err(e) = fs::create_dir_all(&mountpoint).await {
+                        log::error!("Can't create mountpoint: {e}");
+                        return;
+                    }
+
                     let mut inner = inner.lock().unwrap();
                     let mut opts: fuser::Config = Default::default();
                     opts.mount_options
                         .push(fuser::MountOption::DefaultPermissions);
 
-                    match spawn_mount2(f, "/tmp/tablet", &opts) {
+                    match spawn_mount2(f, &mountpoint, &opts) {
                         Ok(rs) => {
                             log::info!("Mounted!");
                             *inner = MonitorInner::Running(rs);
