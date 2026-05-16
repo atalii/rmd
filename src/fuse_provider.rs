@@ -230,7 +230,9 @@ impl Filesystem for FuseProvider {
             fh_store.delete(fh.0)
         };
 
-        if let Err(e) = self.tokio_handle.block_on(fh.shutdown()) {
+        let mut sess = self.sess_manager.lock().unwrap();
+
+        if let Err(e) = self.tokio_handle.block_on(fh.shutdown(sess.sess())) {
             log::error!("Can't shutdown file: {e}");
             reply.error(Errno::EIO);
         } else {

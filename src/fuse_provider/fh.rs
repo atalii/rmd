@@ -5,10 +5,17 @@
 //! creating a file, we won't know what the file needs to be called (usually
 //! either stub.epub, stub.pdf) until after we get the first several bytes.
 
-use std::io::SeekFrom;
+use std::{
+    io::{self, SeekFrom},
+    path::Path,
+};
 
 use fuser::{Errno, OpenAccMode};
-use russh_sftp::{self, client::SftpSession, protocol::OpenFlags};
+use russh_sftp::{
+    self,
+    client::{SftpSession, fs::File},
+    protocol::OpenFlags,
+};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use super::tablet::XOCHITL_PATH;
@@ -104,17 +111,7 @@ impl FileHandle {
                 } else {
                     None
                 } {
-                    log::info!("Creating file at: {new_path}");
-                    let mut f = sess.create(new_path).await.map_err(|e| {
-                        log::warn!("Can't create file: {e}");
-                        Errno::EIO
-                    })?;
-
-                    if let Err(e) = f.write_all(fh.buf.as_slice()).await {
-                        log::warn!("Can't write to new file: {e}");
-                        return Err(Errno::EIO);
-                    };
-
+                    let f = fh.write_to(sess, new_path).await?;
                     *self = FileHandle::Remote(f);
                 };
 
@@ -123,22 +120,42 @@ impl FileHandle {
         }
     }
 
-    pub async fn shutdown(self) -> std::io::Result<()> {
+    pub async fn shutdown(self, sess: &SftpSession) -> std::io::Result<()> {
         match self {
-            FileHandle::Created(f) => f.shutdown().await,
+            FileHandle::Created(f) => f
+                .shutdown(sess)
+                .await
+                .map_err(|e| io::Error::from_raw_os_error(e.code())),
+
             FileHandle::Remote(mut file) => file.shutdown().await,
         }
     }
 }
 
 impl CreatedFileHandle {
-    async fn shutdown(self) -> std::io::Result<()> {
+    async fn write_to<P: AsRef<Path>>(&mut self, sess: &SftpSession, path: P) -> Result<File> {
+        let path = path.as_ref().to_str().ok_or(Errno::EINVAL)?;
+
+        log::debug!("Creating file at: {path}");
+
+        let mut f = sess.create(path).await.map_err(|e| {
+            log::warn!("Can't create file: {e}");
+            io::Error::from_raw_os_error(Errno::EIO.code())
+        })?;
+
+        if let Err(e) = f.write_all(self.buf.as_slice()).await {
+            log::warn!("Can't write to new file at: {path}: {e}");
+            return Err(Errno::EIO);
+        }
+
+        Ok(f)
+    }
+
+    async fn shutdown(mut self, sess: &SftpSession) -> Result<()> {
         // If this is called, we haven't seen enough data to decide whether on
         // our file extension.
-        //
-        // TODO: commit to a .rmd-unknown file extension and warn.
-        Err(std::io::Error::from_raw_os_error(
-            fuser::Errno::EINVAL.into(),
-        ))
+        self.write_to(sess, format!("{}.rmd-unknown-data", self.future_path_stub))
+            .await
+            .map(|_| ())
     }
 }
