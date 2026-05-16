@@ -14,5 +14,17 @@
           src = ./.;
           cargoHash = "sha256-1+cRQ8uSenrjG9+Wg50WaS/FE38zzjUopCsL8IvsVUk=";
         };
+
+      nixosModules.rmd = {
+        systemd.services.rmd = {
+          wantedBy = [ "multi-user.target" ];
+          description = "Daemon for mounting a Remarkable tablet as a filesystem.";
+          serviceConfig = {
+            ExecStart = "${self.packages.x86_64-linux.default}/bin/rmd";
+          };
+
+          environment.RUST_LOG = "rmd";
+        };
+      };
     };
 }
