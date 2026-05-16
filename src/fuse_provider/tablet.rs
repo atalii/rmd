@@ -363,10 +363,10 @@ impl Underlying {
 
         if sess.try_exists(&pdf_path).await? {
             let size = sess.metadata(&pdf_path).await?.size;
-            Ok(size.and_then(|size| Some((Self::Pdf, size))))
+            Ok(size.map(|size| (Self::Pdf, size)))
         } else if sess.try_exists(&epub_path).await? {
             let size = sess.metadata(&epub_path).await?.size;
-            Ok(size.and_then(|size| Some((Self::Epub, size))))
+            Ok(size.map(|size| (Self::Epub, size)))
         } else {
             Ok(None)
         }

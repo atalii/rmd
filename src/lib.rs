@@ -1,7 +1,7 @@
 use std::{
     env,
     ops::DerefMut,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -25,6 +25,12 @@ enum MonitorInner {
 pub struct Monitor {
     inner: Arc<Mutex<MonitorInner>>,
     mountpoint: PathBuf,
+}
+
+impl Default for Monitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Monitor {

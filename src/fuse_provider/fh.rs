@@ -88,9 +88,10 @@ impl FileHandle {
     pub async fn write(&mut self, sess: &SftpSession, offset: u64, data: &[u8]) -> Result<u32> {
         match self {
             FileHandle::Remote(f) => {
-                f.seek(SeekFrom::Start(offset))
-                    .await
-                    .map_err(|x| Errno::EIO)?;
+                f.seek(SeekFrom::Start(offset)).await.map_err(|e| {
+                    log::warn!("Can't seek file for write: {e}");
+                    Errno::EIO
+                })?;
                 let written = f.write(data).await?;
                 written.try_into().map_err(|_| Errno::EOVERFLOW)
             }

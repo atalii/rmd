@@ -36,7 +36,7 @@ impl FhStore {
         if let Some(idx) = self.first_gravestone.take() {
             let old = std::mem::replace(&mut self.inner[idx as usize], Slot::Used(fh));
             self.first_gravestone = old.take_gravestone();
-            idx as u64
+            idx
         } else {
             self.inner.push(Slot::Used(fh));
             (self.inner.len() - 1) as u64
@@ -44,7 +44,7 @@ impl FhStore {
     }
 
     pub fn delete(&mut self, idx: u64) -> FileHandle {
-        let next = std::mem::replace(&mut self.first_gravestone, Some(idx));
+        let next = self.first_gravestone.replace(idx);
         std::mem::replace(&mut self.inner[idx as usize], Slot::Gravestone { next })
             .take_filehandle()
     }
