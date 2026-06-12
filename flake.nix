@@ -16,7 +16,7 @@
         };
 
       nixosModules.rmd = {
-        systemd.services.rmd = {
+        systemd.user.services.rmd = {
           wantedBy = [ "multi-user.target" ];
           description = "Daemon for mounting a Remarkable tablet as a filesystem.";
           serviceConfig = {
